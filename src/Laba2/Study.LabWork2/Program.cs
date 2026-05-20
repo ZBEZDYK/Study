@@ -1,64 +1,64 @@
+using System.Text;
+using Study.LabWork2.Abstractions.Feature.Task1.SubTask2.DtoModels;
 using Study.LabWork2.Feature.Task1.SubTask1;
 using Study.LabWork2.Feature.Task1.SubTask2;
 
 namespace Study.LabWork2;
 
-class Program
+internal static class Program
 {
-    static void Main(string[] args)
+    private static void Main()
     {
-        Console.WriteLine("================================================");
-        Console.WriteLine("ЛАБОРАТОРНАЯ РАБОТА 2 - ЗАДАНИЕ 1");
-        Console.WriteLine("================================================\n");
+        Console.OutputEncoding = Encoding.UTF8;
 
-        // ========== ЗАДАНИЕ 1.1 ==========
-        Console.WriteLine("=== ЗАДАНИЕ 1.1 - Поиск простых чисел ===\n");
+        Console.WriteLine("Лабораторная работа 2");
+        Console.WriteLine();
 
-        int startRange = 1;
-        int endRange = 10000;
-        int threadCount = 4;
-         // Monitor
-        MonitorService monitorService = new MonitorService();
-        Console.WriteLine($"\n--- {monitorService.GetVersionName()} ---");
-        var result1 = monitorService.CountPrimes(startRange, endRange, threadCount);
-        Console.WriteLine(result1.ToString());
+        Console.WriteLine("Задание 1.1");
+        Console.WriteLine();
+        RunSubTask1();
 
-        // Mutex
-        MutexService mutexService = new MutexService();
-        Console.WriteLine($"\n--- {mutexService.GetVersionName()} ---");
-        var result2 = mutexService.CountPrimes(startRange, endRange, threadCount);
-        Console.WriteLine(result2.ToString());
+        Console.WriteLine();
+        Console.WriteLine("Задание 1.2");
+        Console.WriteLine();
+        RunSubTask2();
+    }
 
-        // Semaphore
-        SemaphoreService semaphoreService = new SemaphoreService();
-        Console.WriteLine($"\n--- {semaphoreService.GetVersionName()} ---");
-        var result3 = semaphoreService.CountPrimes(startRange, endRange, threadCount);
-        Console.WriteLine(result3.ToString());
+    private static void RunSubTask1()
+    {
+        MonitorService monitorService = new();
 
-        // ========== ЗАДАНИЕ 1.2 ==========
-        Console.WriteLine("\n\n=== ЗАДАНИЕ 1.2 - Обработка наборов чисел ===\n");
+        using MutexService mutexService = new();
+        using SemaphoreService semaphoreService = new();
 
-        string setsFilePath = "number_sets.txt";
-        List<List<int>> numberSets;
+        var monitorResult = monitorService.CountPrimes(1, 10_000, 4, verbose: true);
+        Console.WriteLine($"Monitor: {monitorResult.PrimeCount}, время: {monitorResult.ElapsedMilliseconds} мс");
+        Console.WriteLine();
 
-        if (File.Exists(setsFilePath))
+        var mutexResult = mutexService.CountPrimes(1, 10_000, 4, verbose: true);
+        Console.WriteLine($"Mutex: {mutexResult.PrimeCount}, время: {mutexResult.ElapsedMilliseconds} мс");
+        Console.WriteLine();
+
+        var semaphoreResult = semaphoreService.CountPrimes(1, 10_000, 4, verbose: true);
+        Console.WriteLine($"Semaphore: {semaphoreResult.PrimeCount}, время: {semaphoreResult.ElapsedMilliseconds} мс");
+    }
+
+    private static void RunSubTask2()
+    {
+        NumberSetProcessor processor = new();
+
+        string filePath = Path.Combine("Data", "number-sets.txt");
+
+        var result = processor.Process(filePath, maxParallelThreads: 3, verbose: true);
+
+        Console.WriteLine();
+
+        foreach (ResultEntryDto entry in result.Results)
         {
-            numberSets = NumberSetProcessor.LoadSetsFromFile(setsFilePath);
-        }
-        else
-        {
-            
-            numberSets = NumberSetProcessor.GenerateNumberSets(15, 100);
-            NumberSetProcessor.SaveSetsToFile(numberSets, setsFilePath);
+            Console.WriteLine($"Набор {entry.SetNumber}: сумма = {entry.Sum}, поток = {entry.ThreadId}");
         }
 
-        NumberSetProcessor processor = new NumberSetProcessor(numberSets, 3);
-        processor.Process();
-        var result = processor.GetResult();
-
-        Console.WriteLine($"\nResult: {result.TotalSum}");
-        Console.WriteLine($"Time: {result.ExecutionTime.TotalMilliseconds:F2} мс");
-
-        Console.ReadKey();
+        Console.WriteLine($"Общий итог: {result.TotalSum}");
+        Console.WriteLine($"Время выполнения: {result.ElapsedMilliseconds} мс");
     }
 }

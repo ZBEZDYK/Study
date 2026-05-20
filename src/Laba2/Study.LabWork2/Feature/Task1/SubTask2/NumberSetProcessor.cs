@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Study.LabWork2.Abstractions.Feature.Task1.SubTask2;
 using Study.LabWork2.Abstractions.Feature.Task1.SubTask2.DtoModels;
 using System.Diagnostics;
@@ -7,158 +8,217 @@ namespace Study.LabWork2.Feature.Task1.SubTask2;
 
 public sealed class NumberSetProcessor : INumberSetProcessor
 {
-    private readonly List<List<int>> _numberSets;
-    private ProcessingResultDto _result;
-    private readonly object _resultsLock = new object();
-    private readonly Mutex _totalSumMutex = new Mutex();
-    private readonly Semaphore _processingSemaphore;
-    private int _totalSum = 0;
-    private List<ResultEntryDto> _resultsList;
+    private const int SetsCount = 15;
+    private const int NumbersInSet = 100;
+    private const int MinNumber = 1;
+    private const int MaxNumber = 100;
 
-    public NumberSetProcessor(List<List<int>> numberSets, int maxConcurrentThreads = 3)
+    private readonly object _resultsLocker = new();
+    private readonly object _consoleLocker = new();
+
+    public ProcessingResultDto Process(
+        IReadOnlyList<IReadOnlyList<int>> numberSets,
+        int maxParallelThreads,
+        bool verbose = false)
     {
-        _numberSets = numberSets;
-        _processingSemaphore = new Semaphore(maxConcurrentThreads, maxConcurrentThreads);
-        _resultsList = new List<ResultEntryDto>();
-    }
+        ValidateNumberSets(numberSets);
 
-    public void Process()
-    {
-        List<Thread> threads = new List<Thread>();
-        Stopwatch sw = Stopwatch.StartNew();
-
-        for (int i = 0; i < _numberSets.Count; i++)
+        if (maxParallelThreads <= 0)
         {
-            int setIndex = i;
-            int threadId = i + 1;
+            throw new ArgumentException("Количество потоков должно быть больше нуля.");
+        }
 
-            Thread thread = new Thread(() => ProcessSingleSet(setIndex, threadId));
+        List<ResultEntryDto> results = new();
+        List<Thread> threads = new();
+
+        using Semaphore semaphore = new(maxParallelThreads, maxParallelThreads);
+        using Mutex totalMutex = new();
+
+        int totalSum = 0;
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+
+        for (int i = 0; i < numberSets.Count; i++)
+        {
+            int setNumber = i + 1;
+            IReadOnlyList<int> numbers = numberSets[i];
+
+            Thread thread = new(() =>
+            {
+                semaphore.WaitOne();
+
+                try
+                {
+                    int threadId = Environment.CurrentManagedThreadId;
+                    int sum = numbers.Sum();
+
+                    lock (_resultsLocker)
+                    {
+                        results.Add(new ResultEntryDto(setNumber, sum, threadId));
+                    }
+
+                    totalMutex.WaitOne();
+
+                    try
+                    {
+                        totalSum += sum;
+                    }
+                    finally
+                    {
+                        totalMutex.ReleaseMutex();
+                    }
+
+                    if (verbose)
+                    {
+                        lock (_consoleLocker)
+                        {
+                            Console.WriteLine($"Набор {setNumber}: сумма = {sum}, поток = {threadId}");
+                        }
+                    }
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
             threads.Add(thread);
             thread.Start();
         }
 
-        foreach (var thread in threads)
+        foreach (Thread thread in threads)
         {
             thread.Join();
         }
 
-        sw.Stop();
+        stopwatch.Stop();
 
-        _result = new ProcessingResultDto
+        List<ResultEntryDto> orderedResults = results
+            .OrderBy(result => result.SetNumber)
+            .ToList();
+
+        if (verbose)
         {
-            Results = _resultsList,
-            TotalSum = _totalSum,
-            ExecutionTime = sw.Elapsed,
-            ProcessedSetsCount = _resultsList.Count
-        };
-    }
-
-    private void ProcessSingleSet(int setIndex, int threadId)
-    {
-        _processingSemaphore.WaitOne();
-
-        try
-        {
-            var numbers = _numberSets[setIndex];
-            int sum = 0;
-            foreach (var num in numbers)
-            {
-                sum += num;
-            }
-
-            var resultEntry = new ResultEntryDto
-            {
-                SetNumber = setIndex + 1,
-                Sum = sum,
-                ThreadId = threadId
-            };
-
-            lock (_resultsLock)
-            {
-                _resultsList.Add(resultEntry);
-                Console.WriteLine($"Набор {setIndex + 1}: сумма = {sum}, обработан потоком {threadId}");
-            }
-
-            _totalSumMutex.WaitOne();
-            try
-            {
-                _totalSum += sum;
-            }
-            finally
-            {
-                _totalSumMutex.ReleaseMutex();
-            }
-        }
-        finally
-        {
-            _processingSemaphore.Release();
-        }
-    }
-
-    public ProcessingResultDto GetResult()
-    {
-        return _result;
-    }
-
-    public static List<List<int>> GenerateNumberSets(int setCount = 15, int numbersPerSet = 100)
-    {
-        Random random = new Random();
-        List<List<int>> sets = new List<List<int>>();
-
-        for (int i = 0; i < setCount; i++)
-        {
-            List<int> numbers = new List<int>();
-            for (int j = 0; j < numbersPerSet; j++)
-            {
-                numbers.Add(random.Next(1, 101));
-            }
-            sets.Add(numbers);
+            Console.WriteLine($"Общий итог по всем наборам: {totalSum}");
+            Console.WriteLine($"Время выполнения: {stopwatch.ElapsedMilliseconds} мс");
         }
 
-        return sets;
+        return new ProcessingResultDto(
+            orderedResults,
+            totalSum,
+            maxParallelThreads,
+            stopwatch.ElapsedMilliseconds);
     }
 
-    public static void SaveSetsToFile(List<List<int>> sets, string filePath)
+    public ProcessingResultDto Process(
+        string filePath,
+        int maxParallelThreads,
+        bool verbose = false)
     {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < sets.Count; i++)
+        if (string.IsNullOrWhiteSpace(filePath))
         {
-            sb.AppendLine($"Набор {i + 1}: {string.Join(" ", sets[i])}");
+            throw new ArgumentException("Путь к файлу не может быть пустым.");
         }
-        File.WriteAllText(filePath, sb.ToString());
+
+        EnsureNumberSetsFileExists(filePath);
+
+        IReadOnlyList<IReadOnlyList<int>> numberSets = LoadNumberSets(filePath);
+
+        return Process(numberSets, maxParallelThreads, verbose);
     }
 
-    public static List<List<int>> LoadSetsFromFile(string filePath)
+    public static IReadOnlyList<IReadOnlyList<int>> LoadNumberSets(string filePath)
     {
-        List<List<int>> sets = new List<List<int>>();
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new ArgumentException("Путь к файлу не может быть пустым.");
+        }
 
         if (!File.Exists(filePath))
         {
-            return sets;
+            throw new FileNotFoundException("Файл с наборами чисел не найден.", filePath);
         }
 
-        string[] lines = File.ReadAllLines(filePath);
+        string[] lines = File.ReadAllLines(filePath)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToArray();
+
+        List<IReadOnlyList<int>> result = new();
 
         foreach (string line in lines)
         {
-            string[] parts = line.Split(':');
-            if (parts.Length == 2)
-            {
-                string[] numberStrings = parts[1].Trim().Split(' ');
-                List<int> numbers = new List<int>();
+            int[] numbers = line
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(int.Parse)
+                .ToArray();
 
-                foreach (string numStr in numberStrings)
-                {
-                    if (!string.IsNullOrEmpty(numStr))
-                    {
-                        numbers.Add(int.Parse(numStr));
-                    }
-                }
-
-                sets.Add(numbers);
-            }
+            result.Add(numbers);
         }
 
-        return sets;
+        ValidateNumberSets(result);
+
+        return result;
+    }
+
+    private static void ValidateNumberSets(IReadOnlyList<IReadOnlyList<int>> numberSets)
+    {
+        ArgumentNullException.ThrowIfNull(numberSets);
+
+        if (numberSets.Count != SetsCount)
+        {
+            throw new InvalidOperationException("Должно быть ровно 15 наборов чисел.");
+        }
+
+        for (int i = 0; i < numberSets.Count; i++)
+        {
+            IReadOnlyList<int> numbers = numberSets[i];
+
+            if (numbers is null)
+            {
+                throw new InvalidOperationException($"Набор №{i + 1} не может быть null.");
+            }
+
+            if (numbers.Count != NumbersInSet)
+            {
+                throw new InvalidOperationException($"Набор №{i + 1} должен содержать ровно 100 чисел.");
+            }
+
+            if (numbers.Any(number => number < MinNumber || number > MaxNumber))
+            {
+                throw new InvalidOperationException($"В наборе №{i + 1} все числа должны быть от 1 до 100.");
+            }
+        }
+    }
+
+    private static void EnsureNumberSetsFileExists(string filePath)
+    {
+        if (File.Exists(filePath))
+        {
+            return;
+        }
+
+        string? directory = Path.GetDirectoryName(filePath);
+
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        Random random = new();
+        List<string> lines = new();
+
+        for (int i = 0; i < SetsCount; i++)
+        {
+            int[] numbers = new int[NumbersInSet];
+
+            for (int j = 0; j < numbers.Length; j++)
+            {
+                numbers[j] = random.Next(MinNumber, MaxNumber + 1);
+            }
+
+            lines.Add(string.Join(' ', numbers));
+        }
+
+        File.WriteAllLines(filePath, lines);
     }
 }
